@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dspy-base-lm"
+version = "0.1.0"
+description = "A minimal, typed DSPy custom language model boilerplate"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "dspy>=3.3,<3.4",
+    "typing-extensions>=4.12",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.0",
+    "pytest>=8.4.0",
+    "ruff>=0.12.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dspy_base_lm"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"README.md" = "dspy_base_lm/README.md"
+"docs/custom-lm-workflow.md" = "dspy_base_lm/docs/custom-lm-workflow.md"
+"docs/feature-matrix.md" = "dspy_base_lm/docs/feature-matrix.md"
+"docs/index.html" = "dspy_base_lm/docs/index.html"
+"docs/workbench.css" = "dspy_base_lm/docs/workbench.css"
+"docs/workbench.js" = "dspy_base_lm/docs/workbench.js"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/README.md",
+    "/docs",
+    "/pyproject.toml",
+    "/src",
+]
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonVersion = "3.10"
+pythonPlatform = "All"
+include = ["src"]
+exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
+reportIncompatibleMethodOverride = "none"
+# DSPy ships typed source but does not currently include a `py.typed` marker.
+reportMissingTypeStubs = "none"
+reportUnknownMemberType = "none"
+reportExplicitAny = "none"
+reportUnnecessaryTypeIgnoreComment = "error"
+reportUnusedVariable = "error"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+exclude = [".caches", ".omo", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",
+    "CPY001",
+    "D203",
+    "D213",
+    "ISC001",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D", "PLR2004", "S101"]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers", "-q"]
+testpaths = ["tests"]
