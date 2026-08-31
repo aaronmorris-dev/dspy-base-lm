@@ -1,3 +1,5 @@
+"""End-to-end integration with DSPy modules and adapters."""
+
 from __future__ import annotations
 
 import json
@@ -42,34 +44,20 @@ class AdapterProvider(LMProvider):
         return self.complete(request, num_retries=num_retries)
 
 
-class SchemaProvider(LMProvider):
+class SchemaProvider(AdapterProvider):
     """Declare native response-schema support and capture the typed request."""
 
     def __init__(self) -> None:
         super().__init__()
         self.last_request: dspy.LMRequest | None = None
 
-    def supported_params(self, model: str) -> frozenset[str]:
-        _ = model
-        return frozenset({"response_format"})
-
     def supports_response_schema(self, model: str) -> bool:
         _ = model
         return True
 
     def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
-        _ = num_retries
         self.last_request = request
-        text = json.dumps({"answer": "typed answer"})
-        return dspy.LMResponse.from_text(text, model=request.model)
-
-    async def acomplete(
-        self,
-        request: dspy.LMRequest,
-        *,
-        num_retries: int,
-    ) -> dspy.LMResponse:
-        return self.complete(request, num_retries=num_retries)
+        return super().complete(request, num_retries=num_retries)
 
 
 def test_custom_lm_runs_through_predict_and_chat_adapter() -> None:
@@ -102,12 +90,12 @@ def test_custom_lm_runs_through_chain_of_thought() -> None:
     assert result.answer == "typed answer"
 
 
-def test_custom_lm_runs_through_json_adapter() -> None:
-    # Given a provider that declares native response-format support
+def test_json_adapter_falls_back_to_json_mode_without_schema_support() -> None:
+    # Given a provider that declares response_format support but no native schemas
     lm = CustomLM(model="adapter/json", provider=AdapterProvider(), cache=False)
     predict = dspy.Predict("question -> answer")
 
-    # When JSONAdapter selects the typed response format
+    # When JSONAdapter selects the JSON-object response format
     with dspy.context(lm=lm, adapter=dspy.JSONAdapter()):
         result = predict(question="Return structured output")
 

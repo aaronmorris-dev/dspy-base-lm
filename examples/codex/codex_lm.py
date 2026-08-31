@@ -69,7 +69,7 @@ class CodexProvider(LMProvider):
         for attempt in range(num_retries):
             try:
                 return self._run_sync(argv, prompt, schema, model=request.model)
-            except _RETRYABLE_ERRORS:  # noqa: PERF203 - retry classification is the loop's job
+            except _RETRYABLE_ERRORS:
                 time.sleep(_backoff_seconds(attempt))
         return self._run_sync(argv, prompt, schema, model=request.model)
 
@@ -80,7 +80,7 @@ class CodexProvider(LMProvider):
         for attempt in range(num_retries):
             try:
                 return await self._run_async(argv, prompt, schema, model=request.model)
-            except _RETRYABLE_ERRORS:  # noqa: PERF203 - retry classification is the loop's job
+            except _RETRYABLE_ERRORS:
                 await asyncio.sleep(_backoff_seconds(attempt))
         return await self._run_async(argv, prompt, schema, model=request.model)
 
@@ -139,7 +139,7 @@ class CodexProvider(LMProvider):
     ) -> dspy.LMResponse:
         with _schema_file(argv, schema) as full_argv:
             try:
-                completed = subprocess.run(  # noqa: S603 - argv is provider-built, shell=False
+                completed = subprocess.run(
                     full_argv,
                     input=prompt,
                     capture_output=True,
@@ -346,7 +346,7 @@ def _response_schema(request: dspy.LMRequest) -> dict[str, Any] | None:
     already demands a JSON object. OpenAI-style ``json_schema`` wrappers are
     unwrapped; any other dict is treated as a JSON schema itself.
     """
-    response_format = cast("object", request.config.response_format)
+    response_format: object = request.config.response_format
     if response_format is None:
         return None
     formats = _as_json_dict(response_format)
@@ -393,7 +393,7 @@ def _parse_events(stdout: str) -> list[dict[str, Any]]:
         if not stripped:
             continue
         try:
-            event = cast("object", json.loads(stripped))
+            event: object = json.loads(stripped)
         except json.JSONDecodeError:
             continue
         parsed = _as_json_dict(event)
@@ -455,13 +455,13 @@ def _classify_backend_error(status: int | None, lowered: str) -> type[dspy.LMErr
 def _unwrap_backend_message(raw_message: str) -> tuple[str, int | None]:
     """Unwrap the JSON error body Codex embeds in failure messages, if present."""
     try:
-        parsed = cast("object", json.loads(raw_message))
+        parsed: object = json.loads(raw_message)
     except json.JSONDecodeError:
         return raw_message, None
     detail = _as_json_dict(parsed)
     if detail is None:
         return raw_message, None
-    inner = _as_json_dict(cast("object", detail.get("error")))
+    inner = _as_json_dict(detail.get("error"))
     inner_message = _get_str(inner, "message") if inner is not None else None
     return inner_message or raw_message, _get_int(detail, "status")
 
@@ -474,14 +474,14 @@ def _as_json_dict(value: object) -> dict[str, Any] | None:
 
 
 def _get_dict(mapping: dict[str, Any], key: str) -> dict[str, Any] | None:
-    return _as_json_dict(cast("object", mapping.get(key)))
+    return _as_json_dict(mapping.get(key))
 
 
 def _get_str(mapping: dict[str, Any], key: str) -> str | None:
-    value = cast("object", mapping.get(key))
+    value: object = mapping.get(key)
     return value if isinstance(value, str) else None
 
 
 def _get_int(mapping: dict[str, Any], key: str) -> int | None:
-    value = cast("object", mapping.get(key))
+    value: object = mapping.get(key)
     return value if isinstance(value, int) else None

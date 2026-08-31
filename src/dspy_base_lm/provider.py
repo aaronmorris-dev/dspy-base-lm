@@ -1,4 +1,4 @@
-"""The provider extension seam for custom DSPy language models."""
+"""The provider interface for custom DSPy language models."""
 
 from abc import ABC, abstractmethod
 

@@ -1,79 +1,72 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "dspy-base-lm"
 version = "0.1.0"
-description = "A lightweight typed BaseLM reference for custom DSPy inference"
+description = "A typed, provider-neutral foundation for building custom DSPy language models."
 readme = "README.md"
-requires-python = ">=3.10,<3.15"
-dependencies = [
-    "dspy>=3.3,<3.4",
-    "pydantic>=2.0",
-    "typing-extensions>=4.12",
+requires-python = ">=3.10"
+authors = [{ name = "Aaron Morris", email = "35127085+aaronmorris-dev@users.noreply.github.com" }]
+keywords = ["dspy", "llm", "custom-lm", "baselm", "provider", "ai"]
+classifiers = [
+  "Operating System :: OS Independent",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = ["dspy>=3.3,<3.4", "pydantic>=2.0", "typing-extensions>=4.12"]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/aaronmorris-dev/dspy-base-lm"
+Repository = "https://github.com/aaronmorris-dev/dspy-base-lm.git"
+Issues = "https://github.com/aaronmorris-dev/dspy-base-lm/issues"
+Changelog = "https://github.com/aaronmorris-dev/dspy-base-lm/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "basedpyright>=1.31.0",
-    "pytest>=8.4.0",
-    "ruff>=0.12.0",
+  "basedpyright>=1.31.0",
+  "poethepoet>=0.36.0",
+  "pytest>=8.4.0",
+  "ruff>=0.12.0",
+  "usechange>=0.1.44",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/dspy_base_lm"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
-[tool.hatch.build.targets.sdist]
-include = [
-    "/README.md",
-    "/pyproject.toml",
-    "/src",
-]
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "examples/codex"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
 [tool.basedpyright]
-typeCheckingMode = "all"
+typeCheckingMode = "strict"
 pythonVersion = "3.10"
-pythonPlatform = "All"
 include = ["src", "examples"]
-exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
 executionEnvironments = [{ root = "examples/codex", extraPaths = ["examples/codex"] }]
-reportIncompatibleMethodOverride = "none"
 # DSPy ships typed source but does not currently include a `py.typed` marker.
 reportMissingTypeStubs = "none"
 reportUnknownMemberType = "none"
-reportExplicitAny = "none"
-reportUnnecessaryTypeIgnoreComment = "error"
-reportUnusedVariable = "error"
+# DSPy 3.3 declares the legacy `forward(prompt, messages, **kwargs)` signature on
+# BaseLM; the typed `forward(request)` contract intentionally differs during the
+# upstream migration.
+reportIncompatibleMethodOverride = "none"
 
-[tool.ruff]
-target-version = "py310"
-line-length = 100
-src = ["src", "tests"]
-exclude = [".caches", ".omo", ".venv", "build", "dist"]
-
-[tool.ruff.lint]
-select = ["ALL"]
-ignore = [
-    "COM812",
-    "CPY001",
-    "D203",
-    "D213",
-    "ISC001",
-]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
-
-[tool.ruff.format]
-docstring-code-format = true
-quote-style = "double"
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D", "PLR2004", "S101"]
-# Examples are runnable scripts, not package modules: no __init__.py, prints
-# allowed, and the Codex provider intentionally spawns the `codex` CLI.
-"examples/**/*.py" = ["INP001", "S607", "T201"]
-
-[tool.pytest.ini_options]
-addopts = ["--strict-config", "--strict-markers", "-q"]
-testpaths = ["tests"]
+[tool.poe.tasks]
+test = "pytest"
+lint = "ruff check ."
+format = "ruff format ."
+typecheck = "basedpyright"
+release = "usechange release"
+check = ["lint", "typecheck", "test"]

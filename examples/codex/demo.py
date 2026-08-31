@@ -6,6 +6,7 @@ Usage: uv run examples/codex/demo.py
 from typing import TYPE_CHECKING, cast
 
 import dspy
+
 from codex_lm import CodexLM
 
 if TYPE_CHECKING:

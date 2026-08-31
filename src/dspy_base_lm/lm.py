@@ -28,7 +28,7 @@ class CustomLM(dspy.BaseLM):
     # Structurally identical to BaseLM's `ForwardContract` migration marker type.
     forward_contract: Literal["legacy", "typed_lm"] = "typed_lm"
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         model: str,
         *,
@@ -111,7 +111,7 @@ class CustomLM(dspy.BaseLM):
             return self._complete(request)
 
         cache_request = self._cache_identity(request)
-        cached = cast("object", dspy.cache.get(cache_request))
+        cached: object = dspy.cache.get(cache_request)
         if isinstance(cached, dspy.LMResponse):
             return cached
 
@@ -128,7 +128,7 @@ class CustomLM(dspy.BaseLM):
             return await self._acomplete(request)
 
         cache_request = self._cache_identity(request)
-        cached = cast("object", dspy.cache.get(cache_request))
+        cached: object = dspy.cache.get(cache_request)
         if isinstance(cached, dspy.LMResponse):
             return cached
 
@@ -167,7 +167,7 @@ class CustomLM(dspy.BaseLM):
             else cache_config.model_copy(update={"enabled": None})
         )
         config_update: dict[str, object] = {"cache": normalized_cache}
-        response_format = cast("object", request.config.response_format)
+        response_format: object = request.config.response_format
         if isinstance(response_format, type) and issubclass(response_format, BaseModel):
             # Key Pydantic response formats by their schema, as dspy.cache does.
             config_update["response_format"] = response_format.model_json_schema()
@@ -224,7 +224,7 @@ class CustomLM(dspy.BaseLM):
 
     @classmethod
     def _validate_request_state(cls, request: dspy.LMRequest) -> None:
-        values = cast("dict[str, object]", request.model_dump(mode="python"))
+        values: dict[str, object] = request.model_dump(mode="python")
         config = values.get("config")
         if isinstance(config, dict):
             values["config"] = _declarative_config_view(cast("dict[str, object]", config))
@@ -272,7 +272,7 @@ def _response_is_cacheable(response: dspy.LMResponse) -> bool:
     """Return whether DSPy can safely persist the completed response."""
     try:
         values: object = response.model_dump(mode="python")
-    except Exception:  # noqa: BLE001 - serialization failures simply bypass caching
+    except Exception:
         return False
     return (
         _is_finite_json(values)
