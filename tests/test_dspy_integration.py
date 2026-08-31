@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import dspy
+import pydantic
 
 from dspy_base_lm import CustomLM, LMProvider
 
@@ -30,6 +31,36 @@ class AdapterProvider(LMProvider):
             )
         else:
             text = "[[ ## answer ## ]]\ntyped answer\n\n[[ ## completed ## ]]"
+        return dspy.LMResponse.from_text(text, model=request.model)
+
+    async def acomplete(
+        self,
+        request: dspy.LMRequest,
+        *,
+        num_retries: int,
+    ) -> dspy.LMResponse:
+        return self.complete(request, num_retries=num_retries)
+
+
+class SchemaProvider(LMProvider):
+    """Declare native response-schema support and capture the typed request."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_request: dspy.LMRequest | None = None
+
+    def supported_params(self, model: str) -> frozenset[str]:
+        _ = model
+        return frozenset({"response_format"})
+
+    def supports_response_schema(self, model: str) -> bool:
+        _ = model
+        return True
+
+    def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
+        _ = num_retries
+        self.last_request = request
+        text = json.dumps({"answer": "typed answer"})
         return dspy.LMResponse.from_text(text, model=request.model)
 
     async def acomplete(
@@ -84,3 +115,20 @@ def test_custom_lm_runs_through_json_adapter() -> None:
     assert result.answer == "typed answer"
     assert lm.supports_response_schema is False
     assert lm.supported_params == {"response_format"}
+
+
+def test_json_adapter_native_structured_output_reaches_the_provider() -> None:
+    # Given a provider that declares native response-schema support
+    provider = SchemaProvider()
+    lm = CustomLM(model="adapter/schema", provider=provider, cache=False)
+
+    # When JSONAdapter selects its native structured-output path
+    with dspy.context(lm=lm, adapter=dspy.JSONAdapter()):
+        result = dspy.Predict("question -> answer")(question="Return structured output")
+
+    # Then the declarative Pydantic response format reaches the provider untranslated
+    assert result.answer == "typed answer"
+    assert provider.last_request is not None
+    response_format = provider.last_request.config.response_format
+    assert isinstance(response_format, type)
+    assert issubclass(response_format, pydantic.BaseModel)

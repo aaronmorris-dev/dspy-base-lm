@@ -5,7 +5,7 @@ import dspy
 import pytest
 
 import dspy_base_lm
-from dspy_base_lm import CustomLM, EchoLM, EchoProvider, LMProvider
+from dspy_base_lm import CustomLM, LMProvider
 
 
 class CapturingProvider(LMProvider):
@@ -53,36 +53,35 @@ def test_injected_provider_is_selected_by_presence_not_truthiness() -> None:
     assert lm.provider is provider
 
 
-def test_echo_lm_returns_a_typed_response() -> None:
-    # Given the explicit runnable EchoLM example
-    lm = EchoLM(model="echo/example")
+def test_custom_lm_returns_a_typed_response() -> None:
+    # Given a deterministic runtime provider
+    provider = CapturingProvider()
+    lm = CustomLM(model="test/capturing", provider=provider)
     request = dspy.LMRequest.from_call(model=lm.model, prompt="hello DSPy")
 
     # When the typed provider boundary is called
     response = lm.forward(request)
 
-    # Then it returns DSPy's response type with the input text
-    assert isinstance(lm.provider, EchoProvider)
-    assert issubclass(EchoProvider, LMProvider)
+    # Then it returns DSPy's response type without transport-specific coercion
     assert isinstance(response, dspy.LMResponse)
-    assert response.text == "hello DSPy"
-    assert response.model == "echo/example"
+    assert response.text == "captured"
+    assert response.model == "test/capturing"
 
 
-def test_echo_lm_returns_a_typed_response_asynchronously() -> None:
-    # Given the explicit runnable EchoLM example
-    lm = EchoLM(model="echo/example")
+def test_custom_lm_returns_a_typed_response_asynchronously() -> None:
+    # Given a deterministic runtime provider
+    lm = CustomLM(model="test/capturing", provider=CapturingProvider())
     request = dspy.LMRequest.from_call(model=lm.model, prompt="hello async DSPy")
 
     async def call_lm() -> dspy.LMResponse:
-        # When the typed asynchronous provider boundary is called
         return await lm.aforward(request)
 
+    # When the typed asynchronous provider boundary is called
     response = anyio.run(call_lm)
 
     # Then it returns the same DSPy response contract
     assert isinstance(response, dspy.LMResponse)
-    assert response.text == "hello async DSPy"
+    assert response.text == "captured"
 
 
 def test_public_api_contains_only_the_reference_types() -> None:
@@ -91,7 +90,7 @@ def test_public_api_contains_only_the_reference_types() -> None:
     exports = set(dspy_base_lm.__all__)
 
     # Then only the intentional teaching surface is public
-    assert exports == {"CustomLM", "EchoLM", "EchoProvider", "LMProvider"}
+    assert exports == {"CustomLM", "LMProvider"}
 
 
 def test_base_lm_configuration_flows_into_the_typed_request() -> None:

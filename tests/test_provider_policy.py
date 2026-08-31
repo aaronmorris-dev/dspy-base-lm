@@ -94,10 +94,10 @@ def test_iterator_results_are_rejected_and_never_cached() -> None:
     lm = CustomLM(model="policy/iterator", provider=provider)
     request = dspy.LMRequest.from_call(model=lm.model, prompt="reject partial output")
 
-    # When the same invalid result is attempted twice
+    # When the same invalid result is attempted twice through the public boundary
     for _ in range(2):
         with pytest.raises(TypeError, match="LMResponse"):
-            lm.forward(request)
+            _ = lm(request)
 
     # Then neither partial result enters DSPy's cache
     assert provider.calls == 2

@@ -5,11 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "dspy-base-lm"
 version = "0.1.0"
-description = "A minimal, typed DSPy custom language model boilerplate"
+description = "A lightweight typed BaseLM reference for custom DSPy inference"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
     "dspy>=3.3,<3.4",
+    "pydantic>=2.0",
     "typing-extensions>=4.12",
 ]
 
@@ -23,18 +24,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/dspy_base_lm"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"README.md" = "dspy_base_lm/README.md"
-"docs/custom-lm-workflow.md" = "dspy_base_lm/docs/custom-lm-workflow.md"
-"docs/feature-matrix.md" = "dspy_base_lm/docs/feature-matrix.md"
-"docs/index.html" = "dspy_base_lm/docs/index.html"
-"docs/workbench.css" = "dspy_base_lm/docs/workbench.css"
-"docs/workbench.js" = "dspy_base_lm/docs/workbench.js"
-
 [tool.hatch.build.targets.sdist]
 include = [
     "/README.md",
-    "/docs",
     "/pyproject.toml",
     "/src",
 ]
@@ -42,8 +34,9 @@ include = [
 typeCheckingMode = "all"
 pythonVersion = "3.10"
 pythonPlatform = "All"
-include = ["src"]
+include = ["src", "examples"]
 exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
+executionEnvironments = [{ root = "examples/codex", extraPaths = ["examples/codex"] }]
 reportIncompatibleMethodOverride = "none"
 # DSPy ships typed source but does not currently include a `py.typed` marker.
 reportMissingTypeStubs = "none"
@@ -77,6 +70,9 @@ quote-style = "double"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D", "PLR2004", "S101"]
+# Examples are runnable scripts, not package modules: no __init__.py, prints
+# allowed, and the Codex provider intentionally spawns the `codex` CLI.
+"examples/**/*.py" = ["INP001", "S607", "T201"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-q"]

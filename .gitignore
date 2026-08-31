@@ -1,4 +1,5 @@
 .venv/
+.caches/
 __pycache__/
 *.py[cod]
 .basedpyright/

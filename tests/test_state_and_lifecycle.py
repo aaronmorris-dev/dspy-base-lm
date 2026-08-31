@@ -1,31 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import dspy
 import pytest
 
-from dspy_base_lm import CustomLM, EchoLM, LMProvider
-
-if TYPE_CHECKING:
-    from dspy.clients.utils_finetune import TrainDataFormat
-
-
-class CompletedTrainingJob(dspy.TrainingJob):
-    def status(self) -> str:
-        return "complete" if self.done() else "running"
+from dspy_base_lm import CustomLM, LMProvider
 
 
 class LifecycleProvider(LMProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self.finetunable = True
-        self.TrainingJob = CompletedTrainingJob
-        self.finetune_model: str | None = None
-        self.finetune_data: list[dict[str, Any]] | None = None
-        self.finetune_format: TrainDataFormat | str | None = None
-        self.finetune_kwargs: dict[str, Any] | None = None
-
     def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
         _ = num_retries
         return dspy.LMResponse.from_text("lifecycle", model=request.model)
@@ -38,34 +21,35 @@ class LifecycleProvider(LMProvider):
     ) -> dspy.LMResponse:
         return self.complete(request, num_retries=num_retries)
 
-    def finetune(
-        self,
-        job: dspy.TrainingJob,
-        model: str,
-        train_data: list[dict[str, Any]],
-        train_data_format: TrainDataFormat | str | None,
-        train_kwargs: dict[str, Any] | None = None,
-    ) -> str:
-        _ = job
-        self.finetune_model = model
-        self.finetune_data = train_data
-        self.finetune_format = train_data_format
-        self.finetune_kwargs = train_kwargs
-        return f"{model}-tuned"
+
+class ReconstructableLM(CustomLM):
+    def infer_provider(self) -> LMProvider:
+        return LifecycleProvider()
 
 
-class FailingLifecycleProvider(LifecycleProvider):
-    def finetune(
-        self,
-        job: dspy.TrainingJob,
-        model: str,
-        train_data: list[dict[str, Any]],
-        train_data_format: TrainDataFormat | str | None,
-        train_kwargs: dict[str, Any] | None = None,
-    ) -> str:
-        _ = self, job, model, train_data, train_data_format, train_kwargs
-        message = "native training failed"
-        raise RuntimeError(message)
+def test_rollout_id_is_stored_flat_and_grouped_per_request() -> None:
+    # Given a rollout identifier passed at construction, as dspy.LM accepts
+    captured: list[dspy.LMRequest] = []
+
+    class CapturingProvider(LifecycleProvider):
+        def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
+            captured.append(request)
+            return super().complete(request, num_retries=num_retries)
+
+    lm = CustomLM(
+        model="state/rollout",
+        provider=CapturingProvider(),
+        cache=False,
+        rollout_id=7,
+    )
+
+    # When a public call flows through DSPy's request normalization
+    _ = lm("group my configuration")
+
+    # Then storage stays flat like BaseLM and grouping happens per request
+    assert lm.kwargs["rollout_id"] == 7
+    assert captured[0].config.cache is not None
+    assert captured[0].config.cache.rollout_id == 7
 
 
 def test_copy_shares_runtime_provider_but_isolates_dspy_state() -> None:
@@ -85,9 +69,9 @@ def test_copy_shares_runtime_provider_but_isolates_dspy_state() -> None:
     assert copied.kwargs["temperature"] == 0.7
 
 
-def test_echo_state_reconstructs_without_serializing_provider() -> None:
-    # Given a reconstructable EchoLM
-    lm = EchoLM(model="echo/reconstruct", cache=False)
+def test_inferred_provider_state_reconstructs_without_runtime_state() -> None:
+    # Given a test-local LM that reconstructs its provider
+    lm = ReconstructableLM(model="test/reconstruct", cache=False)
 
     # When DSPy dumps and loads trusted custom LM state
     state = lm.dump_state()
@@ -95,56 +79,31 @@ def test_echo_state_reconstructs_without_serializing_provider() -> None:
 
     # Then provider runtime is absent from state and inferred on reconstruction
     assert "provider" not in state
-    assert isinstance(restored, EchoLM)
-    assert restored.model == "echo/reconstruct"
+    assert isinstance(restored, ReconstructableLM)
+    assert restored.model == "test/reconstruct"
 
 
-def test_injected_provider_state_requires_fresh_runtime_configuration() -> None:
+def test_provider_replacement_makes_a_reconstructable_copy_runtime_only() -> None:
+    # Given a reconstructable LM and a replacement runtime provider
+    lm = ReconstructableLM(model="test/replaced-provider")
+    replacement = LifecycleProvider()
+
+    # When inherited copy behavior installs the runtime provider
+    copied = lm.copy(provider=replacement)
+
+    # Then the copy uses that provider but cannot serialize misleading reconstruction state
+    assert copied.provider is replacement
+    with pytest.raises(dspy.LMConfigurationError, match="runtime-only"):
+        copied.dump_state()
+
+
+def test_injected_provider_state_fails_before_runtime_state_can_be_saved() -> None:
     # Given a bare CustomLM with an injected runtime provider
     lm = CustomLM(model="state/injected", provider=LifecycleProvider())
-    state = lm.dump_state()
 
-    # When trusted reconstruction is attempted without runtime injection
-    with pytest.raises(dspy.LMNotConfiguredError):
-        dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
-
-    # Then no provider client or credential-bearing runtime entered state
-    assert "provider" not in state
-
-
-@pytest.mark.parametrize(
-    "key",
-    [
-        "api_key",
-        "apiKey",
-        "api_token",
-        "auth_token",
-        "bearer_token",
-        "client",
-        "connection",
-        "openai_api_key",
-        "openaiToken",
-        "private-key",
-        "provider-token",
-        "github_pat",
-        "sdk_client",
-        "signingKey",
-        "ssh_key",
-        "token",
-        "x-api-key",
-    ],
-)
-def test_runtime_provider_state_is_rejected_as_lm_configuration(key: str) -> None:
-    # Given provider runtime state misplaced in persistent LM configuration
-    runtime_value = "do-not-persist"
-
-    # When CustomLM is constructed
-    with pytest.raises(dspy.LMConfigurationError, match="LMProvider"):
-        CustomLM(
-            model="state/runtime-boundary",
-            provider=LifecycleProvider(),
-            **{key: runtime_value},
-        )
+    # When reconstruction state is requested without a reconstructable provider
+    with pytest.raises(dspy.LMConfigurationError, match="runtime-only"):
+        lm.dump_state()
 
 
 def test_runtime_objects_are_rejected_under_innocuous_extension_keys() -> None:
@@ -158,6 +117,56 @@ def test_runtime_objects_are_rejected_under_innocuous_extension_keys() -> None:
             provider=LifecycleProvider(),
             extensions={"backend": runtime_value},
         )
+
+
+def test_native_dspy_config_types_are_normalized_to_safe_persistent_data() -> None:
+    # Given a native DSPy reasoning configuration
+    reasoning = dspy.core.LMReasoningConfig(effort="high")
+
+    # When CustomLM normalizes persistent configuration
+    lm = CustomLM(
+        model="state/native-config",
+        provider=LifecycleProvider(),
+        reasoning=reasoning,
+    )
+
+    # Then BaseLM retains only its finite reconstruction-safe representation
+    assert lm.kwargs["reasoning"] == {
+        "effort": "high",
+        "max_tokens": None,
+        "summary": None,
+    }
+
+
+def test_runtime_objects_are_rejected_in_known_persistent_config() -> None:
+    # Given runtime state in DSPy's permissive response-format field
+    runtime_value = object()
+
+    # When persistent LM configuration is constructed
+    with pytest.raises(dspy.LMConfigurationError, match="response_format"):
+        CustomLM(
+            model="state/known-value-boundary",
+            provider=LifecycleProvider(),
+            response_format=runtime_value,
+        )
+
+
+def test_json_schema_response_format_is_safe_persistent_config() -> None:
+    # Given a finite JSON-schema-like response format
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": {"type": "object"}},
+    }
+
+    # When persistent LM configuration is constructed
+    lm = CustomLM(
+        model="state/schema",
+        provider=LifecycleProvider(),
+        response_format=response_format,
+    )
+
+    # Then the schema remains available to DSPy's normalized request path
+    assert lm.kwargs["response_format"] == response_format
 
 
 def test_cyclic_persistent_extensions_raise_a_typed_configuration_error() -> None:
@@ -174,70 +183,16 @@ def test_cyclic_persistent_extensions_raise_a_typed_configuration_error() -> Non
         )
 
 
-def test_credentials_are_rejected_inside_persistent_extensions() -> None:
-    # Given a credential misplaced in persistent provider extensions
-    extensions = {"authorization": "Bearer do-not-persist"}
+def test_arbitrary_json_extension_keys_are_preserved() -> None:
+    # Given valid JSON configuration with a domain-specific authorization field
+    extensions = {"native": {"authorization": "custom-scheme"}}
 
-    # When CustomLM is constructed
-    with pytest.raises(dspy.LMConfigurationError, match="LMProvider"):
-        CustomLM(
-            model="state/extension-boundary",
-            provider=LifecycleProvider(),
-            extensions={"native": extensions},
-        )
-
-
-def test_finetune_returns_a_custom_lm() -> None:
-    # Given a lifecycle-capable provider
-    provider = LifecycleProvider()
-    lm = CustomLM(model="lifecycle/model", provider=provider)
-
-    # When fine-tuning runs through the public LM method
-    train_data = [{"prompt": "hello"}]
-    train_kwargs = {"epochs": 2}
-    job = lm.finetune(
-        train_data,
-        train_data_format=None,
-        train_kwargs=train_kwargs,
+    # When CustomLM normalizes persistent configuration
+    lm = CustomLM(
+        model="state/extension-boundary",
+        provider=LifecycleProvider(),
+        extensions=extensions,
     )
-    result = job.result(timeout=2)
 
-    # Then the provider owns training work and DSPy owns its job contract
-    assert isinstance(result, CustomLM)
-    assert result.model == "lifecycle/model-tuned"
-    assert result.provider is provider
-    assert provider.finetune_model == "lifecycle/model"
-    assert provider.finetune_data == train_data
-    assert provider.finetune_format is None
-    assert provider.finetune_kwargs == train_kwargs
-    assert job.done()
-    assert job.thread is not None
-    assert not job.thread.is_alive()
-
-
-def test_finetune_preserves_dspys_training_job_failure_semantics() -> None:
-    # Given a provider whose native training operation fails
-    provider = FailingLifecycleProvider()
-    lm = CustomLM(model="lifecycle/failing-model", provider=provider)
-
-    # When DSPy's asynchronous training job completes
-    job = lm.finetune([{"prompt": "hello"}], train_data_format=None)
-    result = job.result(timeout=2)
-
-    # Then the job resolves with the provider error exactly like DSPy's native LM
-    assert isinstance(result, RuntimeError)
-    assert str(result) == "native training failed"
-    assert job.done()
-    assert job.thread is not None
-    assert not job.thread.is_alive()
-
-
-def test_unsupported_finetuning_raises_a_dspy_error() -> None:
-    # Given the non-training Echo provider
-    lm = EchoLM(model="echo/reference")
-
-    # When unavailable training methods are requested
-    with pytest.raises(dspy.LMUnsupportedFeatureError) as finetune_error:
-        lm.finetune([], train_data_format=None)
-    # Then the error identifies the unsupported DSPy feature
-    assert finetune_error.value.features == ["finetuning"]
+    # Then it preserves the value without guessing intent from its key name
+    assert lm.kwargs["extensions"] == extensions
