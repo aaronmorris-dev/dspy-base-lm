@@ -26,29 +26,33 @@ MODEL_PREFIX = "codex/"
 _DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
 
-def request_body(request: dspy.LMRequest) -> dict[str, Any]:
+def build_request_body(request: dspy.LMRequest) -> dict[str, Any]:
     """Build the Responses API request body for one normalized request."""
     _reject_unsupported_config(request)
-    instructions, items = _instructions_and_input(request)
+    instructions, input_items = _instructions_and_items(request)
     body: dict[str, Any] = {
         "model": _native_model(request),
         "store": False,  # The Codex backend rejects stored responses.
         "stream": True,
         "instructions": instructions,
-        "input": items,
+        "input": input_items,
     }
     config = request.config
     if config.reasoning is not None:
-        reasoning = _reasoning_body(config.reasoning)
-        if reasoning:
-            body["reasoning"] = reasoning
+        reasoning_options = _reasoning_options(config.reasoning)
+        if reasoning_options:
+            body["reasoning"] = reasoning_options
     if config.response_format is not None:
-        body["text"] = {"format": _text_format(config.response_format, request.model)}
+        body["text"] = {"format": _response_format(config.response_format, request.model)}
     prompt_cache = config.prompt_cache
-    if prompt_cache is not None and prompt_cache.enabled is not False and prompt_cache.key:
+    if (
+        prompt_cache is not None
+        and prompt_cache.key is not None
+        and prompt_cache.enabled is not False
+    ):
         body["prompt_cache_key"] = prompt_cache.key
     if request.tools:
-        body["tools"] = [_tool(spec) for spec in request.tools]
+        body["tools"] = [_tool_definition(spec) for spec in request.tools]
     if config.tool_choice is not None:
         body["tool_choice"] = _tool_choice(config.tool_choice, request.model)
         if config.tool_choice.parallel is not None:
@@ -71,29 +75,27 @@ def _native_model(request: dspy.LMRequest) -> str:
 def _reject_unsupported_config(request: dspy.LMRequest) -> None:
     """Reject config fields the Responses endpoint cannot honor, never drop them."""
     config = request.config
+    reasoning_max_tokens = None
+    if config.reasoning is not None:
+        reasoning_max_tokens = config.reasoning.max_tokens
     unsupported = {
-        # The subscription endpoint fixes its own sampling controls and rejects
-        # temperature, top_p, and max_output_tokens outright.
         "temperature": config.temperature,
         "top_p": config.top_p,
         "max_tokens": config.max_tokens,
         "stop": config.stop,
         "logprobs": config.logprobs,
-        "reasoning.max_tokens": config.reasoning and config.reasoning.max_tokens,
+        "reasoning.max_tokens": reasoning_max_tokens,
     }
     rejected = [name for name, value in unsupported.items() if value is not None]
     if config.n is not None and config.n != 1:
         rejected.append("n")
-    if config.prompt_cache is not None and config.prompt_cache.enabled and not (
-        config.prompt_cache.key
-    ):
-        rejected.append("prompt_cache.enabled")  # Enabling the prompt cache requires a key.
+    prompt_cache = config.prompt_cache
+    if prompt_cache is not None and prompt_cache.enabled and prompt_cache.key is None:
+        rejected.append("prompt_cache.enabled")
     if config.extensions:
         rejected.extend(f"extensions.{key}" for key in config.extensions)
     if rejected:
-        message = (
-            f"The Codex backend cannot honor request config: {', '.join(sorted(rejected))}."
-        )
+        message = f"The Codex backend cannot honor request config: {', '.join(sorted(rejected))}."
         raise dspy.LMUnsupportedFeatureError(
             message,
             features=sorted(rejected),
@@ -102,14 +104,19 @@ def _reject_unsupported_config(request: dspy.LMRequest) -> None:
         )
 
 
-def _instructions_and_input(request: dspy.LMRequest) -> tuple[str, list[dict[str, Any]]]:
+def _instructions_and_items(request: dspy.LMRequest) -> tuple[str, list[dict[str, Any]]]:
     """Split leading system messages into ``instructions`` and convert the rest."""
-    messages = list(request.messages)
     system_texts: list[str] = []
-    while messages and messages[0].role == "system":
-        system_texts.append(_text_only(messages.pop(0), request.model))
+    first_input_index = 0
+    for message in request.messages:
+        if message.role != "system":
+            break
+        system_texts.append(_text_only(message, request.model))
+        first_input_index += 1
+
     instructions = "\n\n".join(system_texts) or _DEFAULT_INSTRUCTIONS
-    return instructions, _input_items(messages, request.model)
+    input_messages = request.messages[first_input_index:]
+    return instructions, _input_items(input_messages, request.model)
 
 
 def _input_items(messages: list[LMMessage], model: str) -> list[dict[str, Any]]:
@@ -123,17 +130,19 @@ def _input_items(messages: list[LMMessage], model: str) -> list[dict[str, Any]]:
     synthesized_call_ids = count()
     synthesized_result_ids = count()
     for message in messages:
-        role = "developer" if message.role == "system" else message.role
-        content: list[dict[str, Any]] = []
-        trailing: list[dict[str, Any]] = []
+        role = message.role
+        if role == "system":
+            role = "developer"
+        message_content: list[dict[str, Any]] = []
+        separate_items: list[dict[str, Any]] = []
         for part in message.parts:
             if isinstance(part, LMTextPart):
-                content.append(_text_content(role, part.text))
+                message_content.append(_text_content(role, part.text))
             elif isinstance(part, LMImagePart):
-                content.append(_image_content(part, model))
+                message_content.append(_image_content(part, model))
             elif isinstance(part, LMToolCallPart):
                 call_id = part.id or f"call_{next(synthesized_call_ids)}"
-                trailing.append(
+                separate_items.append(
                     {
                         "type": "function_call",
                         "call_id": call_id,
@@ -143,7 +152,7 @@ def _input_items(messages: list[LMMessage], model: str) -> list[dict[str, Any]]:
                 )
             elif isinstance(part, LMToolResultPart):
                 call_id = part.call_id or f"call_{next(synthesized_result_ids)}"
-                trailing.append(
+                separate_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id,
@@ -154,15 +163,17 @@ def _input_items(messages: list[LMMessage], model: str) -> list[dict[str, Any]]:
                 continue  # Reasoning is not replayable without encrypted content.
             else:
                 raise _unsupported_part(part.type, model)
-        if content:
-            items.append({"type": "message", "role": role, "content": content})
-        items.extend(trailing)
+        if message_content:
+            items.append({"type": "message", "role": role, "content": message_content})
+        items.extend(separate_items)
     return items
 
 
 def _text_content(role: str, text: str) -> dict[str, str]:
     """Wrap text as input or output content depending on who said it."""
-    content_type = "output_text" if role == "assistant" else "input_text"
+    content_type = "input_text"
+    if role == "assistant":
+        content_type = "output_text"
     return {"type": content_type, "text": text}
 
 
@@ -208,17 +219,17 @@ def _unsupported_part(feature: str, model: str) -> dspy.LMUnsupportedFeatureErro
     )
 
 
-def _reasoning_body(config_reasoning: LMReasoningConfig) -> dict[str, Any]:
+def _reasoning_options(reasoning_config: LMReasoningConfig) -> dict[str, Any]:
     """Convert reasoning controls; ``max_tokens`` was already rejected."""
     reasoning: dict[str, Any] = {}
-    if config_reasoning.effort is not None:
-        reasoning["effort"] = config_reasoning.effort
-    if config_reasoning.summary is not None:
-        reasoning["summary"] = config_reasoning.summary
+    if reasoning_config.effort is not None:
+        reasoning["effort"] = reasoning_config.effort
+    if reasoning_config.summary is not None:
+        reasoning["summary"] = reasoning_config.summary
     return reasoning
 
 
-def _tool(spec: LMToolSpec) -> dict[str, Any]:
+def _tool_definition(spec: LMToolSpec) -> dict[str, Any]:
     """Convert one provider-independent tool spec to a Responses function tool."""
     tool: dict[str, Any] = {
         "type": "function",
@@ -233,20 +244,20 @@ def _tool(spec: LMToolSpec) -> dict[str, Any]:
 
 def _tool_choice(choice: LMToolChoice, model: str) -> str | dict[str, Any]:
     """Convert DSPy's tool-choice controls to the Responses equivalent."""
-    if choice.allowed:
-        if len(choice.allowed) == 1:
-            return {"type": "function", "name": choice.allowed[0]}
-        message = "The Codex backend cannot restrict tool choice to a set of tools."
-        raise dspy.LMUnsupportedFeatureError(
-            message,
-            features=["tool_choice.allowed"],
-            model=model,
-            provider=PROVIDER_NAME,
-        )
-    return choice.mode
+    if not choice.allowed:
+        return choice.mode
+    if len(choice.allowed) == 1:
+        return {"type": "function", "name": choice.allowed[0]}
+    message = "The Codex backend cannot restrict tool choice to a set of tools."
+    raise dspy.LMUnsupportedFeatureError(
+        message,
+        features=["tool_choice.allowed"],
+        model=model,
+        provider=PROVIDER_NAME,
+    )
 
 
-def _text_format(response_format: object, model: str) -> dict[str, Any]:
+def _response_format(response_format: object, model: str) -> dict[str, Any]:
     """Convert DSPy's ``response_format`` value to a Responses text format.
 
     Accepts a Pydantic model class (DSPy's JSONAdapter passes one when the
@@ -263,29 +274,34 @@ def _text_format(response_format: object, model: str) -> dict[str, Any]:
                 "schema": response_format.model_json_schema(),
             }
         raise _unsupported_response_format(response_format.__name__, model)
-    formats = as_json_dict(response_format)
-    if formats is None:
+    format_data = as_json_dict(response_format)
+    if format_data is None:
         raise _unsupported_response_format(type(response_format).__name__, model)
-    format_type = get_str(formats, "type")
+    format_type = get_str(format_data, "type")
     if format_type == "json_object":
         return {"type": "json_object"}
     if format_type == "json_schema":
-        wrapped = get_dict(formats, "json_schema")
-        if wrapped is None:
-            return formats  # Already Responses-shaped.
+        wrapped_schema = get_dict(format_data, "json_schema")
+        if wrapped_schema is None:
+            return format_data
         return {
             "type": "json_schema",
-            "name": get_str(wrapped, "name") or "response",
-            "strict": bool(wrapped.get("strict")),
-            "schema": get_dict(wrapped, "schema") or {},
+            "name": get_str(wrapped_schema, "name") or "response",
+            "strict": bool(wrapped_schema.get("strict")),
+            "schema": get_dict(wrapped_schema, "schema") or {},
         }
     if format_type is None:
-        return {"type": "json_schema", "name": "response", "strict": False, "schema": formats}
+        return {
+            "type": "json_schema",
+            "name": "response",
+            "strict": False,
+            "schema": format_data,
+        }
     raise _unsupported_response_format(format_type, model)
 
 
-def _unsupported_response_format(described: str, model: str) -> dspy.LMUnsupportedFeatureError:
-    message = f"The Codex backend cannot honor response_format {described!r}."
+def _unsupported_response_format(description: str, model: str) -> dspy.LMUnsupportedFeatureError:
+    message = f"The Codex backend cannot honor response_format {description!r}."
     return dspy.LMUnsupportedFeatureError(
         message,
         features=["response_format"],

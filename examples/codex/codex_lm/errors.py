@@ -41,10 +41,12 @@ def error_from_http_status(
 def error_from_failed_event(event: dict[str, Any], *, model: str) -> dspy.LMError:
     """Map a ``response.failed`` or ``error`` stream event to a DSPy error."""
     response = get_dict(event, "response")
-    error = (get_dict(response, "error") if response is not None else None) or get_dict(
-        event, "error"
-    )
-    source = error if error is not None else event
+    error = get_dict(response, "error")
+    if error is None:
+        error = get_dict(event, "error")
+    source = event
+    if error is not None:
+        source = error
     message = get_str(source, "message") or "The Codex backend reported an unknown error."
     code = get_str(source, "code")
     error_type = _classify(None, code, message.lower())
@@ -93,36 +95,33 @@ def _message_and_code(body: str) -> tuple[str, str | None]:
 def _classify(status: int | None, code: str | None, lowered: str) -> type[dspy.LMError]:
     """Choose the most specific DSPy error type for a backend failure."""
     lowered_code = (code or "").lower()
-    error_type: type[dspy.LMError]
     if "context window" in lowered or "context_length" in lowered_code:
-        error_type = dspy.ContextWindowExceededError
-    elif (
+        return dspy.ContextWindowExceededError
+    if (
         status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}
         or "unauthorized" in lowered
         or "token expired" in lowered
     ):
-        error_type = dspy.LMAuthError
-    elif (
+        return dspy.LMAuthError
+    if (
         status == HTTPStatus.PAYMENT_REQUIRED
         or "billing" in lowered
         or lowered_code == "usage_not_included"
     ):
-        error_type = dspy.LMBillingError
-    elif (
+        return dspy.LMBillingError
+    if (
         status == HTTPStatus.TOO_MANY_REQUESTS
         or "rate limit" in lowered
         or "usage limit" in lowered
         or lowered_code in {"rate_limit_exceeded", "usage_limit_reached"}
     ):
-        error_type = dspy.LMRateLimitError
-    elif (status is not None and status >= HTTPStatus.INTERNAL_SERVER_ERROR) or (
+        return dspy.LMRateLimitError
+    if (status is not None and status >= HTTPStatus.INTERNAL_SERVER_ERROR) or (
         "server_error" in lowered_code
     ):
-        error_type = dspy.LMServerError
-    elif "model is not supported" in lowered or "model_not_found" in lowered_code:
-        error_type = dspy.LMUnsupportedModelError
-    elif status is not None:
-        error_type = dspy.LMInvalidRequestError
-    else:
-        error_type = dspy.LMProviderError
-    return error_type
+        return dspy.LMServerError
+    if "model is not supported" in lowered or "model_not_found" in lowered_code:
+        return dspy.LMUnsupportedModelError
+    if status is not None:
+        return dspy.LMInvalidRequestError
+    return dspy.LMProviderError

@@ -1,17 +1,23 @@
-"""Run DSPy programs on a ChatGPT/Codex subscription over the Responses API.
+"""Run DSPy programs on a ChatGPT/Codex subscription over the Responses API."""
 
-The package is split by domain so each file stays small and readable:
+from typing_extensions import override
 
-- ``auth``: read, refresh, and persist the Codex CLI's credentials.
-- ``translate``: normalized DSPy request to Responses API request body.
-- ``transport``: streamed HTTP calls to the Responses endpoint.
-- ``sse``: Server-Sent Events parsing.
-- ``response``: final Responses object to typed DSPy response.
-- ``errors``: backend failures to typed ``dspy.LMError`` types.
-- ``provider`` and ``lm``: the DSPy-facing ``CodexProvider`` and ``CodexLM``.
-"""
+from dspy_base_lm import CustomLM, LMProvider
 
-from .lm import CodexLM
 from .provider import CodexProvider
+
+
+class CodexLM(CustomLM):
+    """A reconstructable ChatGPT/Codex-subscription LM.
+
+    Credentials are ambient (``codex login``), so the provider is inferable
+    from the environment and ``dump_state()`` stays free of secrets.
+    """
+
+    @override
+    def infer_provider(self) -> LMProvider:
+        """Reconstruct the provider from the Codex CLI's ambient login."""
+        return CodexProvider()
+
 
 __all__ = ["CodexLM", "CodexProvider"]

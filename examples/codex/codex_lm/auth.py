@@ -43,7 +43,11 @@ class CodexAuth:
 
     def __init__(self, codex_home: str | None = None) -> None:
         """Locate ``auth.json`` under ``codex_home``, ``$CODEX_HOME``, or ``~/.codex``."""
-        home = codex_home or os.environ.get("CODEX_HOME") or "~/.codex"
+        home = codex_home
+        if home is None:
+            home = os.environ.get("CODEX_HOME")
+        if home is None:
+            home = "~/.codex"
         self._auth_file = Path(home).expanduser() / "auth.json"
         self._lock = threading.Lock()
         self._tokens: CodexTokens | None = None
@@ -148,7 +152,9 @@ class CodexAuth:
         access_token = get_str(tokens_data, "access_token")
         if access_token is None:
             raise self._not_logged_in("has no access token")
-        account_id = get_str(tokens_data, "account_id") or _account_id_from_jwt(access_token)
+        account_id = get_str(tokens_data, "account_id")
+        if account_id is None:
+            account_id = _account_id_from_jwt(access_token)
         if account_id is None:
             raise self._not_logged_in("names no ChatGPT account id")
         return CodexTokens(access_token=access_token, account_id=account_id)
@@ -172,4 +178,4 @@ def _account_id_from_jwt(token: str) -> str | None:
     if claims is None:
         return None
     auth_claim = get_dict(claims, _JWT_AUTH_CLAIM)
-    return get_str(auth_claim, "chatgpt_account_id") if auth_claim is not None else None
+    return get_str(auth_claim, "chatgpt_account_id")

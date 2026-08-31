@@ -12,24 +12,38 @@ def as_json_dict(value: object) -> dict[str, Any] | None:
     return None
 
 
-def get_dict(mapping: dict[str, Any], key: str) -> dict[str, Any] | None:
+def get_dict(mapping: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
     """Return ``mapping[key]`` when it is a JSON object, else ``None``."""
+    if mapping is None:
+        return None
     return as_json_dict(mapping.get(key))
 
 
-def get_list(mapping: dict[str, Any], key: str) -> list[Any] | None:
+def get_list(mapping: dict[str, Any] | None, key: str) -> list[Any] | None:
     """Return ``mapping[key]`` when it is a JSON array, else ``None``."""
+    if mapping is None:
+        return None
     value: object = mapping.get(key)
-    return cast("list[Any]", value) if isinstance(value, list) else None
+    if isinstance(value, list):
+        return cast("list[Any]", value)
+    return None
 
 
-def get_str(mapping: dict[str, Any], key: str) -> str | None:
+def get_str(mapping: dict[str, Any] | None, key: str) -> str | None:
     """Return ``mapping[key]`` when it is a string, else ``None``."""
+    if mapping is None:
+        return None
     value: object = mapping.get(key)
-    return value if isinstance(value, str) else None
+    if isinstance(value, str):
+        return value
+    return None
 
 
-def get_int(mapping: dict[str, Any], key: str) -> int | None:
+def get_int(mapping: dict[str, Any] | None, key: str) -> int | None:
     """Return ``mapping[key]`` when it is an integer, else ``None``."""
+    if mapping is None:
+        return None
     value: object = mapping.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None

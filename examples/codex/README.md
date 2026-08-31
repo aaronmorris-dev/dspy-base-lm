@@ -29,7 +29,7 @@ One file per domain, so each stays small and readable on its own:
 | [`codex_lm/response.py`](codex_lm/response.py) | Final Responses object → typed `dspy.LMResponse` |
 | [`codex_lm/errors.py`](codex_lm/errors.py) | Backend failures → typed `dspy.LMError` types |
 | [`codex_lm/provider.py`](codex_lm/provider.py) | `CodexProvider`: capabilities, retries, orchestration |
-| [`codex_lm/lm.py`](codex_lm/lm.py) | `CodexLM`: reconstructable `CustomLM` subclass |
+| [`codex_lm/__init__.py`](codex_lm/__init__.py) | Public exports and the reconstructable `CodexLM` |
 
 `CodexLM.infer_provider()` works because authentication is ambient: the
 provider carries no secrets, so `dump_state()` stays safe and saved programs

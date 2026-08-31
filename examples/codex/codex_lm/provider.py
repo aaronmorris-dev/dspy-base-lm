@@ -12,8 +12,8 @@ from typing_extensions import override
 from dspy_base_lm import LMProvider
 
 from .auth import CodexAuth
-from .response import lm_response
-from .translate import request_body
+from .response import build_lm_response
+from .translate import build_request_body
 from .transport import DEFAULT_BASE_URL, ResponsesTransport
 
 _MAX_BACKOFF_SECONDS = 30.0
@@ -71,7 +71,7 @@ class CodexProvider(LMProvider):
     @override
     def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
         """Complete one request synchronously, retrying transient failures."""
-        body = request_body(request)
+        body = build_request_body(request)
         for attempt in range(num_retries):
             try:
                 return self._complete_once(body, request.model)
@@ -84,7 +84,7 @@ class CodexProvider(LMProvider):
     @override
     async def acomplete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
         """Complete one request asynchronously, retrying transient failures."""
-        body = request_body(request)
+        body = build_request_body(request)
         for attempt in range(num_retries):
             try:
                 return await self._acomplete_once(body, request.model)
@@ -103,13 +103,17 @@ class CodexProvider(LMProvider):
         await self._transport.aclose()
 
     def _complete_once(self, body: dict[str, Any], model: str) -> dspy.LMResponse:
-        return lm_response(self._transport.request(body, model=model), model=model)
+        response = self._transport.request(body, model=model)
+        return build_lm_response(response, model=model)
 
     async def _acomplete_once(self, body: dict[str, Any], model: str) -> dspy.LMResponse:
-        return lm_response(await self._transport.arequest(body, model=model), model=model)
+        response = await self._transport.arequest(body, model=model)
+        return build_lm_response(response, model=model)
 
 
 def _retry_delay(attempt: int, error: dspy.LMError) -> float:
     """Honor the backend's suggested delay when present, else back off exponentially."""
-    delay = error.retry_after if error.retry_after is not None else 2.0**attempt
+    delay = error.retry_after
+    if delay is None:
+        delay = 2.0**attempt
     return min(delay, _MAX_BACKOFF_SECONDS)
