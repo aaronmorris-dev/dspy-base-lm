@@ -132,8 +132,11 @@ provider capabilities — reject what your backend cannot honor rather than drop
 ## Example: ChatGPT/Codex subscription
 
 [`examples/codex`](examples/codex) is a complete provider that runs DSPy programs on a
-ChatGPT subscription through the Codex CLI — subprocess transport, JSONL parsing,
-usage capture, backend error mapping, retries, and a reconstructable `CodexLM`.
+ChatGPT subscription by calling the ChatGPT backend's Responses endpoint directly —
+streamed HTTP transport, credential refresh, native function calling and JSON schemas,
+reasoning controls, usage capture, backend error mapping, retries, and a
+reconstructable `CodexLM`. The endpoint is unofficial; the example's README covers
+the tradeoff.
 
 ```sh
 uv run examples/codex/demo.py
