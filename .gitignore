@@ -1,7 +1,9 @@
 .venv/
 .caches/
+.DS_Store
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .basedpyright/
 .ruff_cache/
 build/
