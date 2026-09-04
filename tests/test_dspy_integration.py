@@ -1,11 +1,8 @@
-"""End-to-end integration with DSPy modules and adapters."""
-
 from __future__ import annotations
 
 import json
 
 import dspy
-import pydantic
 
 from dspy_base_lm import CustomLM, LMProvider
 
@@ -44,32 +41,13 @@ class AdapterProvider(LMProvider):
         return self.complete(request, num_retries=num_retries)
 
 
-class SchemaProvider(AdapterProvider):
-    """Declare native response-schema support and capture the typed request."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.last_request: dspy.LMRequest | None = None
-
-    def supports_response_schema(self, model: str) -> bool:
-        _ = model
-        return True
-
-    def complete(self, request: dspy.LMRequest, *, num_retries: int) -> dspy.LMResponse:
-        self.last_request = request
-        return super().complete(request, num_retries=num_retries)
-
-
 def test_custom_lm_runs_through_predict_and_chat_adapter() -> None:
-    # Given a deterministic typed LM configured with ChatAdapter
     lm = CustomLM(model="adapter/chat", provider=AdapterProvider(), cache=False)
     predict = dspy.Predict("question -> answer")
 
-    # When a real DSPy module invokes the LM
     with dspy.context(lm=lm, adapter=dspy.ChatAdapter()):
         result = predict(question="Does the typed boundary work?")
 
-    # Then the adapter parses the provider's answer
     assert result.answer == "typed answer"
     assert len(lm.history) == 1
     assert lm.history[0]["model"] == "adapter/chat"
@@ -77,46 +55,23 @@ def test_custom_lm_runs_through_predict_and_chat_adapter() -> None:
 
 
 def test_custom_lm_runs_through_chain_of_thought() -> None:
-    # Given a deterministic typed LM and ChainOfThought module
     lm = CustomLM(model="adapter/reasoning", provider=AdapterProvider(), cache=False)
     program = dspy.ChainOfThought("question -> answer")
 
-    # When the module requests reasoning and an answer
     with dspy.context(lm=lm, adapter=dspy.ChatAdapter()):
         result = program(question="Why use typed requests?")
 
-    # Then both signature fields survive the DSPy adapter path
     assert result.reasoning == "typed reasoning"
     assert result.answer == "typed answer"
 
 
-def test_json_adapter_falls_back_to_json_mode_without_schema_support() -> None:
-    # Given a provider that declares response_format support but no native schemas
+def test_custom_lm_runs_through_json_adapter() -> None:
     lm = CustomLM(model="adapter/json", provider=AdapterProvider(), cache=False)
     predict = dspy.Predict("question -> answer")
 
-    # When JSONAdapter selects the JSON-object response format
     with dspy.context(lm=lm, adapter=dspy.JSONAdapter()):
         result = predict(question="Return structured output")
 
-    # Then DSPy parses the normalized provider response
     assert result.answer == "typed answer"
     assert lm.supports_response_schema is False
     assert lm.supported_params == {"response_format"}
-
-
-def test_json_adapter_native_structured_output_reaches_the_provider() -> None:
-    # Given a provider that declares native response-schema support
-    provider = SchemaProvider()
-    lm = CustomLM(model="adapter/schema", provider=provider, cache=False)
-
-    # When JSONAdapter selects its native structured-output path
-    with dspy.context(lm=lm, adapter=dspy.JSONAdapter()):
-        result = dspy.Predict("question -> answer")(question="Return structured output")
-
-    # Then the declarative Pydantic response format reaches the provider untranslated
-    assert result.answer == "typed answer"
-    assert provider.last_request is not None
-    response_format = provider.last_request.config.response_format
-    assert isinstance(response_format, type)
-    assert issubclass(response_format, pydantic.BaseModel)

@@ -1,23 +1,17 @@
 """A thin typed language model that delegates transport work to a provider."""
 
 import json
-from collections.abc import Callable
-from types import TracebackType
 from typing import Literal, TypeAlias, cast
 
 import dspy
-from dspy.core import LMCacheConfig, LMPromptCacheConfig, LMReasoningConfig, LMToolChoice
 from dspy.utils.callback import BaseCallback
-from pydantic import BaseModel
 from typing_extensions import Self, override
 
+from dspy_base_lm._dspy import ForwardContract
 from dspy_base_lm.provider import LMProvider
 
 _ConfigValue: TypeAlias = (
     bool | int | float | str | list["_ConfigValue"] | dict[str, "_ConfigValue"] | None
-)
-_ConfigInput: TypeAlias = (
-    _ConfigValue | LMCacheConfig | LMPromptCacheConfig | LMReasoningConfig | LMToolChoice
 )
 
 
@@ -25,8 +19,7 @@ class CustomLM(dspy.BaseLM):
     """A provider-backed base class for typed custom DSPy language models."""
 
     _provider_injected: bool
-    # Structurally identical to BaseLM's `ForwardContract` migration marker type.
-    forward_contract: Literal["legacy", "typed_lm"] = "typed_lm"
+    forward_contract: ForwardContract = "typed_lm"
 
     def __init__(
         self,
@@ -40,20 +33,30 @@ class CustomLM(dspy.BaseLM):
         num_retries: int = 3,
         provider: LMProvider | None = None,
         extensions: dict[str, _ConfigValue] | None = None,
-        **kwargs: _ConfigInput,
+        **kwargs: object,
     ) -> None:
-        """Create a typed custom LM around an injected or inferred provider.
-
-        Persistent configuration is stored flat, exactly as ``BaseLM`` stores
-        ``self.kwargs``; DSPy groups it into typed request config per call.
-        """
-        persistent_config: dict[str, _ConfigInput] = dict(kwargs)
+        """Create a typed custom LM around an injected or inferred provider."""
+        persistent_config = dict(kwargs)
         if extensions is not None:
             persistent_config["extensions"] = dict(extensions)
-        safe_config = {
-            key: self._reconstruction_safe_value(key, value)
-            for key, value in persistent_config.items()
+        normalized_config = dspy.LMConfig.from_kwargs(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **persistent_config,
+        )
+        normalized_values = cast(
+            "dict[str, _ConfigValue]",
+            normalized_config.model_dump(mode="python"),
+        )
+        for key, value in normalized_values.items():
+            self._reject_non_json_config(value, prefix=key)
+        persistent_config = {
+            key: value
+            for key, value in normalized_values.items()
+            if key not in {"temperature", "max_tokens", "extensions"} and value is not None
         }
+        if normalized_config.extensions:
+            persistent_config["extensions"] = normalized_config.extensions
         super().__init__(
             model=model,
             model_type=model_type,
@@ -62,7 +65,7 @@ class CustomLM(dspy.BaseLM):
             cache=cache,
             callbacks=callbacks,
             num_retries=num_retries,
-            **safe_config,
+            **persistent_config,
         )
         self.model: str = model
         self._provider_injected = provider is not None
@@ -111,7 +114,7 @@ class CustomLM(dspy.BaseLM):
             return self._complete(request)
 
         cache_request = self._cache_identity(request)
-        cached: object = dspy.cache.get(cache_request)
+        cached = cast("object", dspy.cache.get(cache_request))
         if isinstance(cached, dspy.LMResponse):
             return cached
 
@@ -128,7 +131,7 @@ class CustomLM(dspy.BaseLM):
             return await self._acomplete(request)
 
         cache_request = self._cache_identity(request)
-        cached: object = dspy.cache.get(cache_request)
+        cached = cast("object", dspy.cache.get(cache_request))
         if isinstance(cached, dspy.LMResponse):
             return cached
 
@@ -138,12 +141,22 @@ class CustomLM(dspy.BaseLM):
         return response
 
     def _complete(self, request: dspy.LMRequest) -> dspy.LMResponse:
-        with _ProviderErrorBoundary(self._unexpected_error):
-            return self.provider.complete(request, num_retries=self.num_retries)
+        try:
+            response = self.provider.complete(request, num_retries=self.num_retries)
+        except dspy.LMError:
+            raise
+        except Exception as error:
+            raise self._unexpected_error(error) from error
+        return self._validate_typed_lm_response(response)
 
     async def _acomplete(self, request: dspy.LMRequest) -> dspy.LMResponse:
-        with _ProviderErrorBoundary(self._unexpected_error):
-            return await self.provider.acomplete(request, num_retries=self.num_retries)
+        try:
+            response = await self.provider.acomplete(request, num_retries=self.num_retries)
+        except dspy.LMError:
+            raise
+        except Exception as error:
+            raise self._unexpected_error(error) from error
+        return self._validate_typed_lm_response(response)
 
     def _unexpected_error(self, error: Exception) -> dspy.LMUnexpectedError:
         provider_name = type(self.provider).__name__
@@ -166,27 +179,9 @@ class CustomLM(dspy.BaseLM):
             if cache_config is None or cache_config.rollout_id is None
             else cache_config.model_copy(update={"enabled": None})
         )
-        config_update: dict[str, object] = {"cache": normalized_cache}
-        response_format: object = request.config.response_format
-        if isinstance(response_format, type) and issubclass(response_format, BaseModel):
-            # Key Pydantic response formats by their schema, as dspy.cache does.
-            config_update["response_format"] = response_format.model_json_schema()
-        config = request.config.model_copy(update=config_update)
+        config = request.config.model_copy(update={"cache": normalized_cache})
         normalized_request = request.model_copy(update={"config": config}, deep=True)
         return normalized_request.model_dump(mode="json")
-
-    @classmethod
-    def _reconstruction_safe_value(cls, key: str, value: _ConfigInput) -> object:
-        """Validate and convert one persistent config value to finite JSON-like data.
-
-        Native DSPy config objects are kept as their reconstruction-safe dumps
-        so ``dump_state()`` output stays serializable.
-        """
-        safe_value: object = (
-            value.model_dump(mode="python") if isinstance(value, BaseModel) else value
-        )
-        cls._reject_non_json_config(safe_value, prefix=key)
-        return safe_value
 
     @classmethod
     def _reject_non_json_config(
@@ -224,48 +219,10 @@ class CustomLM(dspy.BaseLM):
 
     @classmethod
     def _validate_request_state(cls, request: dspy.LMRequest) -> None:
-        values: dict[str, object] = request.model_dump(mode="python")
-        config = values.get("config")
-        if isinstance(config, dict):
-            values["config"] = _declarative_config_view(cast("dict[str, object]", config))
-        cls._reject_non_json_config(values, prefix="request")
-
-
-class _ProviderErrorBoundary:
-    """Preserve DSPy errors and normalize unknown provider failures."""
-
-    def __init__(self, normalize: Callable[[Exception], dspy.LMUnexpectedError]) -> None:
-        self._normalize: Callable[[Exception], dspy.LMUnexpectedError] = normalize
-
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(
-        self,
-        exception_type: type[BaseException] | None,
-        exception: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> Literal[False]:
-        _ = exception_type, traceback
-        if exception is None or isinstance(exception, dspy.LMError):
-            return False
-        if isinstance(exception, Exception):
-            raise self._normalize(exception) from exception
-        return False
-
-
-def _declarative_config_view(config: dict[str, object]) -> dict[str, object]:
-    """Represent a Pydantic ``response_format`` class by its JSON schema.
-
-    DSPy treats a Pydantic model class as valid declarative request config:
-    ``dspy.LM`` forwards it to the transport, and ``dspy.cache`` keys it by
-    ``model_json_schema()``. Mirror that so JSON-safety validation accepts it,
-    while providers own the wire translation.
-    """
-    response_format = config.get("response_format")
-    if isinstance(response_format, type) and issubclass(response_format, BaseModel):
-        return {**config, "response_format": response_format.model_json_schema()}
-    return config
+        cls._reject_non_json_config(
+            request.model_dump(mode="python"),
+            prefix="request",
+        )
 
 
 def _response_is_cacheable(response: dspy.LMResponse) -> bool:

@@ -119,10 +119,9 @@ data, and `CustomLM` enforces this at construction and per request.
 
 ### Structured outputs
 
-`request.config.response_format` may arrive as JSON-like data or, when DSPy's
-`JSONAdapter` selects native structured outputs, as a Pydantic model class. Both are
-declarative; providers translate them to the backend (`model_json_schema()` covers the
-class form).
+`request.config.response_format` may carry finite JSON-like schema configuration.
+Providers translate that data to the backend; runtime classes and objects stay on the
+provider rather than entering saved state or cache keys.
 
 ### Known DSPy 3.3 limits
 
